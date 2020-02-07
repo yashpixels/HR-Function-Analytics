@@ -1,0 +1,723 @@
+---
+title: "Machine Learning Project"
+author: "Yashdeep"
+date: "30/01/2020"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = 'C:/Users/Hp/Desktop/R Programming')
+```
+
+##Library Callout
+
+```{r}
+library(ggplot2)
+library(forcats)
+library(corrplot)
+library(dplyr)
+library(DMwR)
+library(caTools)
+library(rms)
+library(pscl)
+library(lmtest)
+library(ROCR)
+library(pROC)
+library(ineq)
+library(class)
+library(caret)
+library(e1071)
+library(ipred)
+library(rpart)
+library(gbm)
+library(xgboost)
+```
+
+## Environment Setup
+
+```{r}
+setwd("C:/Users/Hp/Desktop/R Programming")
+getwd()
+```
+
+## Data Import
+
+```{r}
+CarsData <- read.csv("Cars_edited.csv", header = TRUE)
+head(CarsData)
+summary(CarsData)
+str(CarsData)
+```
+
+## Check for Multicollinearity 
+
+```{r}
+Matrix <- cor(CarsData[,c(-2,-9)])
+corrplot(Matrix, method = "pie", type = "upper" )
+
+Matrix2 <- cor(CarsData[,c(-1,-2,-5,-9)])
+corrplot(Matrix2, method = "pie", type = "upper" )
+```
+
+## Feature Engineering
+
+```{r}
+levels(CarsData$Transport)
+fct_count(CarsData$Transport)
+Work.Transport <- fct_collapse(CarsData$Transport,
+                          CarUser = "Car",
+                          NonCarUser = c("2Wheeler", "Public Transport"))
+fct_count(Work.Transport)
+
+EmployeeInformationData <- cbind(CarsData,Work.Transport) ###Use Again for XG BOOST
+EmployeeInformationData$Engineer <- as.factor(EmployeeInformationData$Engineer)
+EmployeeInformationData$MBA <- as.factor(EmployeeInformationData$MBA)
+EmployeeInformationData$license <- as.factor(EmployeeInformationData$license)
+EmployeeInformationData$Transport <- NULL
+
+head(EmployeeInformationData)
+summary(EmployeeInformationData)
+str(EmployeeInformationData)
+```
+
+## Missing Values and Outlier Analysis
+
+```{r}
+colSums(is.na(EmployeeInformationData))
+sum(is.na(EmployeeInformationData$MBA))
+EmployeeInformationData[is.na(EmployeeInformationData)] <- 0
+
+```
+
+## Univariate Analysis
+
+```{r}
+hist(EmployeeInformationData$Work.Exp, main = "Histogram of Work Experience", xlab = "Work Experience in Years")
+
+boxplot(EmployeeInformationData$Salary, xlab = "Salary", main = "Boxplot of Salary")
+boxplot(EmployeeInformationData$Age, xlab = "Age", main = "Boxplot of Age")
+boxplot(EmployeeInformationData$Distance, xlab = "Distance", main = "Boxplot of Distance")
+boxplot(EmployeeInformationData$Work.Exp, xlab = "Work Experience", main = "Boxplot of Work Experience")
+
+hist(EmployeeInformationData$Age, main = "Histogram of Age", xlab = "Age")
+
+```
+
+## Bi-Variate Analysis
+```{r}
+qplot(EmployeeInformationData$Gender, xlab = "Gender", ylab = "Frequency",
+      main  = "Genderwise distribution of Car and Non Cars Users", fill = EmployeeInformationData$Work.Transport) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='Transport Preference')
+
+qplot(EmployeeInformationData$Gender, xlab = "Gender", ylab = "Frequency",
+      main  = "Genderwise distribution of MBA Grads", fill = EmployeeInformationData$MBA) + theme(plot.title = element_text(hjust = 0.5)) + labs(fill='MBA Grad')
+
+qplot(EmployeeInformationData$Gender, xlab = "Gender", ylab = "Frequency",
+      main  = "Genderwise distribution of Engineers", fill = EmployeeInformationData$Engineer) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='Engineer')
+
+qplot(EmployeeInformationData$Gender, xlab = "Gender", ylab = "Frequency",
+      main  = "Genderwise distribution of License Holders", fill = EmployeeInformationData$license) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='License')
+
+qplot(EmployeeInformationData$Work.Exp, xlab = "Work Experience in Years", ylab = "Total Count",
+      main  = "Histogram of Work Experience", fill = EmployeeInformationData$Work.Transport) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='Transport Preference')
+
+
+qplot(EmployeeInformationData$Salary, xlab = "Salary Distribution", ylab = "Total Count",
+      main  = "Histogram of Salary with transport preference", fill = EmployeeInformationData$Work.Transport) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='Transport Preference')                                                                                         
+
+qplot(EmployeeInformationData$Age, xlab = "Age in Years", ylab = "Total Count",
+      main  = "Histogram of Age of Employees", fill = EmployeeInformationData$Work.Transport) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='Transport Preference')
+
+qplot(EmployeeInformationData$Distance, xlab = "Distance in KMs", ylab = "Total Count",
+      main  = "Distance Distribution with Transport Preference", fill = EmployeeInformationData$Work.Transport) + 
+  theme(plot.title = element_text(hjust = 0.5)) + labs(fill='Transport Preference')
+
+qplot(EmployeeInformationData$Age, EmployeeInformationData$Salary, xlab = "Age", ylab = "Salary", 
+      main = "Relationship of Age and Salary") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+qplot(EmployeeInformationData$Work.Exp, EmployeeInformationData$Salary, xlab = "Age", ylab = "Salary", 
+      main = "Relationship of Work Experience and Salary") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+## Data Preparation using SMOTE
+
+```{r}
+table(EmployeeInformationData$Work.Transport)
+dim(EmployeeInformationData)
+
+Perc.Non.Cars.Users <- sum(EmployeeInformationData$Work.Transport == "NonCarUser")/nrow(EmployeeInformationData)
+Perc.Non.Cars.Users
+Perc.Cars.Users <- sum(EmployeeInformationData$Work.Transport == "CarUser")/nrow(EmployeeInformationData)
+Perc.Cars.Users
+
+Smote.Data <- SMOTE(Work.Transport~.,EmployeeInformationData, k = 5, perc.over = 1000, perc.under = 700)
+table(Smote.Data$Work.Transport)
+dim(Smote.Data)
+
+Perc.Non.Cars.SmoteData <- sum(Smote.Data$Work.Transport == "NonCarUser")/nrow(Smote.Data)
+Perc.Non.Cars.SmoteData
+Perc.Car.Users.SmoteData <- sum(Smote.Data$Work.Transport == "CarUser")/nrow(Smote.Data)
+Perc.Car.Users.SmoteData
+```
+
+## Splitting Data into Train and Test sets
+
+```{r}
+str(Smote.Data)
+seed = 1000 
+set.seed(seed) 
+Splitting <- sample.split(Smote.Data$Work.Transport, SplitRatio = 0.7) 
+Transport.Trainset <- subset(Smote.Data, Splitting == TRUE) 
+Transport.Testset <- subset(Smote.Data, Splitting == FALSE) 
+dim(Transport.Trainset)
+dim(Transport.Testset)
+```
+
+## Data Slicing
+
+```{r}
+prop.table(table(Smote.Data$Work.Transport))
+prop.table(table(Transport.Trainset$Work.Transport))
+prop.table(table(Transport.Testset$Work.Transport))
+```
+
+## Logistic Regression 
+
+```{r}
+Log.Reg.Model.All.Features <- glm(Work.Transport~. , data = Transport.Trainset,
+                           family = binomial("logit"))
+summary(Log.Reg.Model.All.Features)
+vif(Log.Reg.Model.All.Features)
+
+Treated.Log.Reg.Model <- glm(Work.Transport~., data = Transport.Trainset[,c(-1,-5)], family = binomial("logit"))
+summary(Treated.Log.Reg.Model)
+vif(Treated.Log.Reg.Model)
+```
+
+## Evaluating Model Performance
+
+```{r}
+lrtest(Treated.Log.Reg.Model)
+anova(Treated.Log.Reg.Model)
+pR2(Treated.Log.Reg.Model)
+```
+
+## Prediction and Confusion Matrix (In-Sample)
+```{r}
+plot(Treated.Log.Reg.Model$fitted.values)
+plot(Transport.Trainset$Work.Transport,Treated.Log.Reg.Model$fitted.values)
+
+Predicted.train <- predict(Treated.Log.Reg.Model, data = Transport.Trainset, type = "response")
+
+M <- table(Transport.Trainset$Work.Transport,Treated.Log.Reg.Model$fitted.values > 0.1)
+M
+summary(Transport.Trainset$Work.Transport)
+416/470
+2674/2989
+
+Classification.Err.Rate <- (M[1,2]+M[2,1])/nrow(Transport.Trainset) 
+Classification.Err.Rate*100
+
+Accuracy <- 1 - Classification.Err.Rate
+Accuracy*100  
+
+# Sensitivity : 0.8851
+# Specificity : 0.8946
+# Classification Error : 10.66782
+# Accuracy : 89.33218
+##########################
+#             FALSE TRUE #
+# NonCarUser  2674  315  #
+# CarUser       54  416  #
+##########################
+```
+
+## Model Performace Measures (ROC,KS,AUC,Gini)
+
+```{r}
+roc(Transport.Trainset$Work.Transport,Treated.Log.Reg.Model$fitted.values)
+plot(roc(Transport.Trainset$Work.Transport,Treated.Log.Reg.Model$fitted.values))
+
+ROC.Train <- prediction(Predicted.train,Transport.Trainset$Work.Transport)
+Perf <- performance(ROC.Train,"fpr","tpr")
+plot(Perf, col = "red", main = "ROC Curve for train data") + abline(0, 1, lty = 8, col = "blue")
+KS <- max(Perf@y.values[[1]] - Perf@x.values[[1]])
+KS
+
+AUC <- performance(ROC.Train,"auc")
+AUC <- as.numeric(AUC@y.values)
+AUC <- 1 - AUC
+AUC
+
+Gini <- ineq(Predicted.train,"gini")
+Gini
+####################
+# KS : 0.7896365   #
+# AUC : 0.9643131  #
+# GIni : 0.7922676 #
+####################
+```
+
+## Prediction and Confusion Matrix (Out-Sample)
+
+```{r}
+Predicted.test <- predict(Treated.Log.Reg.Model, newdata = Transport.Testset, type = "response")
+M1 <- table(Transport.Testset$Work.Transport, Predicted.test > 0.1)
+M1
+summary(Transport.Testset$Work.Transport) 
+
+176/201
+1152/1281
+
+Error.Rate <- (M1[1,2]+M1[2,1])/nrow(Transport.Testset)
+Error.Rate*100
+
+Accuracy1 <- 1 - Error.Rate
+Accuracy1*100
+
+# Sensitivity : 0.8756
+# Specificity : 0.8992
+# Classification Error :  10.39136
+# Accuracy : 89.60864
+
+##########################
+#             FALSE TRUE #
+# NonCarUser  1152  129  #
+# CarUser       25  176  #
+##########################
+```
+
+## Model Performace Measures on Out-Sample (ROC,KS,AUC,Gini)
+
+```{r}
+ROC.OutSample <- prediction(Predicted.test,Transport.Testset$Work.Transport)
+Perf1 <- performance(ROC.OutSample,"fpr","tpr")
+plot(Perf1, col = "red", main = "ROC Curve for train data") + abline(0, 1, lty = 8, col = "blue")
+KS1 <- max(Perf1@y.values[[1]]-Perf1@x.values[[1]])
+KS1
+
+AUC1 <- performance(ROC.OutSample,"auc")
+AUC1 <- as.numeric(AUC1@y.values)
+AUC1 <- 1 - AUC1
+AUC1
+
+Gini1 <- ineq(Predicted.test,"gini")
+Gini1
+####################
+# KS : 0.7828189   #
+# AUC : 0.9504896  #
+# Gini :  0.790595 #
+####################
+```
+
+## Scaling data for K-Nearest Neighbours (KNN)
+
+```{r}
+ScaledTrainData <- scale(Transport.Trainset[,c(-2,-3,-4,-8,-9)])
+head(ScaledTrainData)
+dim(ScaledTrainData)
+sqrt(3459)/2
+
+# Optimal value of k as per above method is near 29. 
+
+ScaledTestData <- scale(Transport.Testset[,c(-2,-3,-4,-8,-9)])
+head(ScaledTestData)
+```
+
+## Estimating optimal number for K
+
+```{r}
+knn_fit = train(Work.Transport ~., data = Transport.Trainset, method = "knn",
+                 trControl = trainControl(method = "cv", number = 3),
+                 tuneLength = 10)
+
+knn_fit
+```
+
+## Applying KNN
+
+```{r}
+KNN.Cars <- knn(ScaledTrainData, ScaledTestData, Transport.Trainset$Work.Transport, k = 17)
+KNN.Table <- table(Transport.Testset$Work.Transport , KNN.Cars)
+KNN.Table
+summary(Transport.Testset$Work.Transport)
+186/201
+1268/1281
+
+Error.Rate.KNN <- (KNN.Table[1,2]+KNN.Table[2,1])/nrow(Transport.Testset)
+Error.Rate.KNN*100
+
+Accuracy.KNN <- 1 - Error.Rate.KNN
+Accuracy.KNN*100
+
+# Sensitivity : 0.9253
+# Specificity : 0.9898
+# Classification Error :  1.889339
+# Accuracy : 98.11066
+####################################
+#              NonCarUser CarUser  #
+#  NonCarUser       1268      13   #
+#  CarUser            15     186   #
+####################################
+```
+
+## Naive Bayes Model
+
+```{r}
+NB.Cars <- naiveBayes(Work.Transport~., data = Transport.Trainset)
+NB.Cars
+
+NB.Predict.Cars <- predict(NB.Cars, type = "raw", newdata = Transport.Trainset)
+plot(Transport.Trainset$Work.Transport,NB.Predict.Cars[,2])
+
+NB.Table <- table(Transport.Trainset$Work.Transport,NB.Predict.Cars[,2] > 0.5)
+NB.Table
+summary(Transport.Trainset$Work.Transport)
+
+391/470
+2893/2989  
+
+Error.Rate.NB <- (NB.Table[1,2]+NB.Table[2,1])/nrow(Transport.Trainset)
+Error.Rate.NB*100
+
+Accuracy.NB <- 1 - Error.Rate.NB
+Accuracy.NB*100
+
+# Sensitivity : 0.8319
+# Specificity : 0.9678
+# Classification Error :  5.059266
+# Accuracy : 94.94073
+############################
+#             FALSE TRUE   #
+#  NonCarUser  2893  113   #
+#  CarUser       79  391   #
+############################
+```
+
+## Model Performace Measures on in sample data (ROC,KS,AUC,Gini)
+
+```{r}
+ROC.NB <- prediction(NB.Predict.Cars[,2], Transport.Trainset$Work.Transport)
+Perf.NB <- performance(ROC.NB,"fpr","tpr")
+plot(Perf.NB, col = "red", main = "ROC Curve for train data") + abline(0, 1,lty = 8,col = "blue")
+KS3 <- max(Perf.NB@y.values[[1]]-Perf.NB@x.values[[1]])
+KS3
+
+AUC3 <- performance(ROC.NB,"auc")
+AUC3 <- as.numeric(AUC3@y.values)
+AUC3 <- 1 - AUC3
+AUC3
+
+Gini3 <- ineq(NB.Predict.Cars[,2],"gini")
+Gini3
+####################
+# KS : 0.9083455   #
+# AUC : 0.9840102  #
+# Gini : 0.8554052 #
+####################
+```
+
+## Naive Bayes on Out of Sample data 
+
+```{r}
+NB.Pred.Cars.Test <- predict(NB.Cars, type = "raw", newdata = Transport.Testset)
+NB.Table.Test <- table(Transport.Testset$Work.Transport, NB.Pred.Cars.Test[,2] > 0.5)
+NB.Table.Test
+summary(Transport.Testset$Work.Transport)
+
+164/201
+1227/1281
+
+Error.Rate.NBTest <- (NB.Table.Test[1,2]+NB.Table.Test[2,1])/nrow(Transport.Testset)
+Error.Rate.NBTest*100
+
+Accuracy.NBTest <- 1 - Error.Rate.NBTest
+Accuracy.NBTest*100
+# Sensitivity : 0.8159
+# Specificity : 0.9578
+# Classification Error :   6.140351
+# Accuracy : 93.85965
+############################
+#               FALSE TRUE #
+#  NonCarUser  1227   54   #
+#  CarUser       37  164   #
+############################
+```
+
+## Model Performace Measures on out-sample data (ROC,KS,AUC,Gini)
+
+```{r}
+ROC.NBTest <- prediction(NB.Pred.Cars.Test[,2], Transport.Testset$Work.Transport)
+Perf.NBTest <- performance(ROC.NBTest,"fpr","tpr")
+plot(Perf.NBTest, col = "red", main = "ROC Curve for train data") + abline(0,1,lty =8,col= "blue")
+KS.NBTest <- max(Perf.NBTest@y.values[[1]]-Perf.NBTest@x.values[[1]])
+KS.NBTest
+
+AUC4 <- performance(ROC.NBTest,"auc")
+AUC4 <- as.numeric(AUC4@y.values)
+AUC4 <- 1 - AUC4
+AUC4
+
+Gini4 <- ineq(NB.Pred.Cars.Test[,2],"gini")
+Gini4
+####################
+# KS : 0.8900346   #
+# AUC : 0.9751593  #
+# Gini : 0.852969  #
+####################
+```
+
+## Bagging and Confusion Matrix on In-Sample data
+
+```{r}
+Cars.Bagging <- bagging(Work.Transport~., data = Transport.Trainset,
+                        control=rpart.control(maxdepth=5, minsplit=4))
+
+Transport.Trainset$PredClass <- predict(Cars.Bagging, Transport.Trainset)
+head(Transport.Trainset)
+Table.Bagging <- table(Transport.Trainset$Work.Transport,Transport.Trainset$PredClass)
+Table.Bagging
+
+444/470
+2989/2989
+
+Error.Rate.Bagging.Train <- (Table.Bagging[1,1]+Table.Bagging[2,2])/nrow(Transport.Trainset)
+Error.Rate.Bagging.Train*100
+
+Accuracy.Bagging.Train <- 1 - Error.Rate.Bagging.Train
+Accuracy.Bagging.Train *100
+
+# Sensitivity : 0.9446
+# Specificity : 1
+# Classification Error :  0.7516623
+# Accuracy : 99.24834
+###################################
+#              CarUser NonCarUser #
+#  NonCarUser       0       2989  # 
+#  CarUser        444         26  #
+###################################
+```
+
+## Bagging and Confusion Matrix on Out-Sample data
+
+```{r}
+Transport.Testset$PredClass <- predict(Cars.Bagging, Transport.Testset)
+Table.Bagging.Test <- table(Transport.Testset$Work.Transport, Transport.Testset$PredClass )
+Table.Bagging.Test
+
+183/201
+1281/1281
+
+Error.Rate.Bagging.Test <- (Table.Bagging.Test[1,1]+Table.Bagging.Test[2,2])/nrow(Transport.Testset)
+Error.Rate.Bagging.Test*100
+
+Accuracy.Bagging.Test <- 1 - Error.Rate.Bagging.Test
+Accuracy.Bagging.Test*100
+
+# Sensitivity : 0.9104
+# Specificity : 1
+# Classification Error :  1.214575
+# Accuracy : 98.78543
+###################################
+#               CarUser NonCarUser#
+#  NonCarUser       0       1281  #
+#  CarUser        183        18  #
+###################################
+```
+
+## Feature modelling for GBM Boosting
+
+```{r}
+Cars.Train.GBM <- Transport.Trainset[,-10]
+Cars.Test.GBM <- Transport.Testset[,-10]
+
+levels(Cars.Train.GBM$Work.Transport) <- c(0,1) 
+levels(Cars.Train.GBM$Work.Transport)
+Cars.Train.GBM$Work.Transport <- as.numeric(Cars.Train.GBM$Work.Transport)
+str(Cars.Train.GBM)
+Cars.Train.GBM <- transform(Cars.Train.GBM, Work.Transport = Work.Transport - 1)
+```
+
+## GBM Boosting
+
+```{r}
+gbm.fit.cars <- gbm(formula = Work.Transport~.,
+                    distribution = "bernoulli",
+                    data = Cars.Train.GBM,
+                    n.trees = 10000,
+                    interaction.depth = 1,
+                    shrinkage = .01,
+                    cv.folds = 5,
+                    n.cores = NULL,
+                    verbose = FALSE)
+
+summary(gbm.fit.cars)
+```
+
+## GBM Model Prediction on training data 
+
+```{r}
+plot(gbm.fit.cars$cv.fitted)
+Cars.Train.GBM$Pred.gbm.class <- predict(gbm.fit.cars, Cars.Train.GBM, type = "response")
+head(Cars.Train.GBM)
+
+plot(as.factor(Cars.Train.GBM$Work.Transport), Cars.Train.GBM$Pred.gbm.class)
+GBM.CF <- table(Cars.Train.GBM$Work.Transport, Cars.Train.GBM$Pred.gbm.class > 0.5 )
+GBM.CF
+summary(as.factor(Cars.Train.GBM$Work.Transport))
+
+469/470
+2989/2989
+
+Error.Rate.GBM <- (GBM.CF[1,2]+GBM.CF[2,1])/nrow(Cars.Train.GBM)
+Error.Rate.GBM*100
+
+Accuracy.GBM <- 1 - Error.Rate.GBM
+Accuracy.GBM*100
+# Sensitivity : 0.9978
+# Specificity : 1
+# Classification Error :  0.02891009
+# Accuracy : 99.97109
+#################
+#    FALSE TRUE #
+#  0  2989    0 #
+#  1     1  469 #
+#################
+```
+
+## GBM Model Prediction on Test data
+
+```{r}
+Cars.Test.GBM$Pred.Gbm.Class <- predict(gbm.fit.cars, newdata = Cars.Test.GBM, type = "response")
+Pred.Gbm.Class <- predict(gbm.fit.cars, newdata = Cars.Test.GBM, type = "response")
+
+GBM.CF.Test <- table(Cars.Test.GBM$Work.Transport, Pred.Gbm.Class > 0.5)
+GBM.CF.Test
+
+201/201
+1281/1281
+
+Error.Rate.GBMTest <- (GBM.CF.Test[1,2]+GBM.CF.Test[2,1])/nrow(Cars.Test.GBM)
+Error.Rate.GBMTest*100
+
+Accuracy.GBMTest <- 1 - Error.Rate.GBMTest
+Accuracy.GBMTest*100
+
+# Sensitivity : 1
+# Specificity : 1
+# Classification Error :  0
+# Accuracy : 100
+#################
+#    FALSE TRUE #
+#  0  1281    0 #
+#  1        201 #
+#################
+```
+
+## Preparing Data for XGboost 
+
+```{r}
+EmployeeInformationData.XGboost <- cbind(CarsData,Work.Transport)
+Smote.Data.XGboost <- SMOTE(Work.Transport~.,EmployeeInformationData.XGboost, k = 5, perc.over = 1000, perc.under = 700)
+str(Smote.Data.XGboost)
+
+seed = 1000 
+set.seed(seed) 
+Splitting.XGboost <- sample.split(Smote.Data.XGboost$Work.Transport, SplitRatio = 0.7) 
+Transport.XGboost.Train <- subset(Smote.Data.XGboost[,c(-2,-9)], Splitting.XGboost == TRUE) 
+Transport.XGboost.Test <- subset(Smote.Data.XGboost[,c(-2,-9)], Splitting.XGboost == FALSE) 
+dim(Transport.XGboost.Train)
+dim(Transport.XGboost.Test)
+
+Transport.XGboost.Train$Work.Transport <- as.numeric(Transport.XGboost.Train$Work.Transport)
+
+Transport.XGboost.Train <- transform(Transport.XGboost.Train, Work.Transport = Work.Transport - 1)
+
+str(Transport.XGboost.Train)
+
+GD.Features.Train <- as.matrix(Transport.XGboost.Train[,-8])
+GD.Label <- as.matrix(Transport.XGboost.Train[,8])
+GD.Features.Test <- as.matrix(Transport.XGboost.Test[,-8])
+```
+
+## Applying XGBoost
+
+```{r}
+XGB.Fit.Cars <- xgboost(data = GD.Features.Train,
+                        label = GD.Label,
+                        eta = 0.001,
+                        max_depth = 3,
+                        min_child_weight = 3,
+                        nrounds = 10000,
+                        nfold = 5,
+                        objective = "binary:logistic",
+                        verbose = 1,               
+                        early_stopping_rounds = 10)
+XGB.Fit.Cars
+```
+
+## Prediction on Train Data (XGBoost)
+
+```{r}
+XGB.Pred.Class <- predict(XGB.Fit.Cars,GD.Features.Train)
+XGBoost.Table <- table(as.factor(Transport.XGboost.Train$Work.Transport),XGB.Pred.Class > 0.5)
+XGBoost.Table
+
+437/470
+2952/2989
+
+Error.Rate.XGBoost.Train <- (XGBoost.Table[1,2]+XGBoost.Table[2,1])/nrow(Transport.XGboost.Train)
+Error.Rate.XGBoost.Train*100
+
+Accuracy.XGBoost.Train <- 1 - Error.Rate.XGBoost.Train
+Accuracy.XGBoost.Train*100
+
+# Sensitivity : 0.9297
+# Specificity : 0.9876
+# Classification Error :  2.023706
+# Accuracy : 97.97629
+#################
+#    FALSE TRUE #
+#  0  2952   37 #
+#  1    33  437 #
+#################
+```
+
+## Prediction on out of sample data 
+
+```{r}
+XGB.Pred.Class.Test <- predict(XGB.Fit.Cars,GD.Features.Test)
+XGBoost.Table.Test <- table(as.factor(Transport.XGboost.Test$Work.Transport),XGB.Pred.Class.Test > 0.5)
+XGBoost.Table.Test
+
+182/201
+1261/1281
+
+Error.Rate.XGBoost.Test <- (XGBoost.Table.Test[1,2]+XGBoost.Table.Test[2,1])/nrow(Transport.XGboost.Test)
+Error.Rate.XGBoost.Test*100
+
+Accuracy.XGBoost.Test <- 1 - Error.Rate.XGBoost.Test 
+Accuracy.XGBoost.Test*100
+
+# Sensitivity : 0.9054
+# Specificity : 0.9843
+# Classification Error :  2.631579
+# Accuracy : 97.36842
+#################
+#    FALSE TRUE #
+#  0  1261   20 #
+#  1    19  182 #
+#################
+```
+```
+
